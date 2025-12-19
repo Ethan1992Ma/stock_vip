@@ -276,18 +276,20 @@ if ticker_input:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
+                    with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
-                        # 1. 設定正規交易時段 (美股 09:30-16:00, 台股 09:00-13:30)
+                        # 1. 定義時間範圍字串 (用於直接過濾數據)
+                        is_us = ".TW" not in ticker_input
                         t_start = "09:30" if is_us else "09:00"
                         t_end = "16:00" if is_us else "13:30"
                         
-                        # 2. 【絕對過濾】直接刪除盤前盤後資料 (只保留 09:30~16:00)
-                        # 這會強制圖表只畫出這段時間，VWAP 也絕對不會溢出
+                        # 2. 【絕對過濾】直接使用 Pandas 刪除盤前盤後資料
+                        # 這行指令會把不屬於 09:30~16:00 的資料全部丟掉，圖表就不可能畫出來了
                         df_plot = df_intra_tz.between_time(t_start, t_end).copy()
                         
                         if not df_plot.empty:
-                            # 3. 繪製 VWAP (只在正規時間內)
+                            # 3. 繪製 VWAP (因為數據已經乾淨了，VWAP 也不會溢出)
                             if 'VWAP' in df_plot.columns:
                                 fig_spark.add_trace(go.Scatter(
                                     x=df_plot.index, y=df_plot['VWAP'], 
@@ -295,7 +297,7 @@ if ticker_input:
                                     name='VWAP', hoverinfo='skip'
                                 ))
                             
-                            # 4. 繪製股價 (填色區域)
+                            # 4. 繪製股價走勢 (包含填色)
                             day_open = df_plot['Open'].iloc[0]
                             day_close = df_plot['Close'].iloc[-1]
                             line_color = COLOR_UP if day_close >= day_open else COLOR_DOWN
@@ -307,13 +309,13 @@ if ticker_input:
                                 fill='tozeroy', fillcolor=fill_color, hoverinfo='skip'
                             ))
                             
-                            # 5. 強制鎖定 X 軸範圍 (確保左右對齊文字)
+                            # 5. 設定 X 軸範圍 (確保左右文字對齊)
                             current_date = df_plot.index[0].date()
-                            tz_obj = pytz.timezone(tz_str)
+                            tz_obj = pytz.timezone('America/New_York' if is_us else 'Asia/Taipei')
                             
-                            # 建立當日的開盤與收盤時間點 (Datetime物件)
-                            dt_start_obj = tz_obj.localize(datetime.combine(current_date, time(9, 30) if is_us else time(9, 0)))
-                            dt_end_obj = tz_obj.localize(datetime.combine(current_date, time(16, 0) if is_us else time(13, 30)))
+                            # 建立當日的標準開收盤時間點
+                            dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 30) if is_us else time(9, 0)))
+                            dt_end = tz_obj.localize(datetime.combine(current_date, time(16, 0) if is_us else time(13, 30)))
                             
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
@@ -321,7 +323,7 @@ if ticker_input:
                             fig_spark.update_layout(
                                 height=80, 
                                 margin=dict(l=0, r=40, t=5, b=5), 
-                                xaxis=dict(visible=False, range=[dt_start_obj, dt_end_obj]), # 這裡強制鎖定
+                                xaxis=dict(visible=False, range=[dt_start, dt_end]), # 強制鎖定範圍
                                 yaxis=dict(visible=False, range=[y_min, y_max]), 
                                 paper_bgcolor='rgba(0,0,0,0)', 
                                 plot_bgcolor='rgba(0,0,0,0)', 
@@ -330,7 +332,7 @@ if ticker_input:
                             )
 
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
-                    if not df_intra.empty and not df_plot.empty:
+                    if not df_intra.empty and 'df_plot' in locals() and not df_plot.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
                         st.markdown(get_timeline_html(ticker_input), unsafe_allow_html=True)
                 
