@@ -331,9 +331,9 @@ if ticker_input:
                 chart_config = {'displayModeBar': False, 'scrollZoom': False}
 
                 # 1. K線圖 + 5, 10, 20, 60, 120 MA
-                st.markdown("<div class='chart-title'>📈 股價走勢 & 均線 (5/10/20/60/120)</div>", unsafe_allow_html=True)
+                st.markdown("<div class='chart-title'>📈 股價走勢 </div>", unsafe_allow_html=True)
                 fig_price = go.Figure()
-                fig_price.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN, name='K線'))
+                fig_price.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN, name='K線', showlegend=False))
                 
                 # 【關鍵修改】加入 10MA (藍色)，並更新列表
                 # 顏色順序：5(紫), 10(藍), 20(橘), 60(綠), 120(灰)
