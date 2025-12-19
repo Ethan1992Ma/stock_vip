@@ -231,25 +231,22 @@ if ticker_input:
 
             with tab_analysis:
                 if not df_intra.empty:
-                    # 計算 VWAP
                     df_intra = calculate_vwap(df_intra)
                     
-                    # 處理時區
                     df_intra.index = pd.to_datetime(df_intra.index)
-                    is_us = ".TW" not in ticker_input
-                    tz_target = 'America/New_York' if is_us else 'Asia/Taipei'
-                    
-                    # 統一轉為目標時區
-                    if df_intra.index.tz is None:
-                        try:
-                            df_intra_tz = df_intra.tz_localize('UTC').tz_convert(tz_target)
-                        except:
-                            df_intra_tz = df_intra.tz_localize(tz_target)
+                    if ".TW" in ticker_input:
+                        tz_str = 'Asia/Taipei'
+                        open_time, close_time = time(9, 0), time(13, 30)
                     else:
-                        df_intra_tz = df_intra.tz_convert(tz_target)
+                        tz_str = 'America/New_York'
+                        open_time, close_time = time(9, 30), time(16, 0)
+                    try: df_intra_tz = df_intra.tz_convert(tz_str)
+                    except: df_intra_tz = df_intra
                     
-                    day_high = df_intra_tz['High'].max()
-                    day_low = df_intra_tz['Low'].min()
+                    mask_reg_hl = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
+                    df_reg_hl = df_intra_tz[mask_reg_hl]
+                    day_high = df_reg_hl['High'].max() if not df_reg_hl.empty else df_intra_tz['High'].max()
+                    day_low = df_reg_hl['Low'].min() if not df_reg_hl.empty else df_intra_tz['Low'].min()
                 
                 previous_close = info.get('previousClose', df.iloc[-2]['Close'])
                 regular_price = info.get('currentPrice', info.get('regularMarketPrice', last['Close']))
@@ -269,7 +266,6 @@ if ticker_input:
                 st.markdown(f"### 📱 {info.get('longName', ticker_input)} ({ticker_input})")
                 st.caption(f"目前策略：{strat_desc}")
                 
-                # --- 迷你走勢圖區塊 (修正語法錯誤與過濾邏輯) ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     fig_spark = go.Figure()
@@ -283,7 +279,6 @@ if ticker_input:
                             df_plot = df_intra.tz_convert(tz_tw)
 
                         # --- 2. 定義交易日範圍 (17:00 ~ 隔日 09:00) ---
-                        # 取得最新一筆數據的時間，推算「當前交易日」的起始點
                         last_dt = df_plot.index[-1]
                         if last_dt.hour < 12: # 凌晨/早上 -> 交易日從昨天 17:00 開始
                             session_start = (last_dt - pd.Timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
@@ -293,7 +288,6 @@ if ticker_input:
                         session_end = session_start + pd.Timedelta(hours=16) # 隔天 09:00 結束
 
                         # 定義正規盤 (冬令時: 22:30 - 05:00)
-                        # 注意：這裡使用 +timedelta 確保跨日正確
                         reg_start = session_start.replace(hour=22, minute=30)
                         reg_end = session_start + pd.Timedelta(days=1).replace(hour=5, minute=0, second=0, microsecond=0)
 
@@ -301,7 +295,7 @@ if ticker_input:
                         df_plot = df_plot[(df_plot.index >= session_start) & (df_plot.index <= session_end)]
 
                         if not df_plot.empty:
-                            # 分割出正規盤數據 (用於填色)
+                            # 分割出正規盤數據 (用於填色與 VWAP)
                             df_reg = df_plot[(df_plot.index >= reg_start) & (df_plot.index <= reg_end)]
 
                             # --- 3. 繪圖層 (Layers) ---
@@ -338,42 +332,34 @@ if ticker_input:
                                         name='VWAP', hoverinfo='skip'
                                     ))
 
-                            # --- 4. 座標軸設定 (關鍵：用 X 軸刻度取代 HTML) ---
-                            # 台股與美股分開處理
-                            if ".TW" not in ticker_input:
-                                # 美股：設定 4 個關鍵時間點
-                                tick_vals = [session_start, reg_start, reg_end, session_end]
-                                tick_texts = [
-                                    "17:00<br><span style='font-size:9px; color:gray'>盤前</span>",
-                                    "🔔22:30<br><span style='font-size:9px; color:gray'>開盤</span>",
-                                    "🌙05:00<br><span style='font-size:9px; color:gray'>收盤</span>",
-                                    "09:00<br><span style='font-size:9px; color:gray'>結算</span>"
-                                ]
-                                x_range = [session_start, session_end]
-                            else:
-                                # 台股 (簡單處理)
-                                tick_vals = None 
-                                tick_texts = None
-                                x_range = None
+                            # --- 4. 座標軸設定 (關鍵：使用 tickvals 原生對齊) ---
+                            # 計算四個關鍵時間點
+                            tick_vals = [session_start, reg_start, reg_end, session_end]
+                            tick_texts = [
+                                "17:00<br><span style='font-size:9px; color:gray'>盤前</span>",
+                                "🔔22:30<br><span style='font-size:9px; color:gray'>開盤</span>",
+                                "🌙05:00<br><span style='font-size:9px; color:gray'>收盤</span>",
+                                "09:00<br><span style='font-size:9px; color:gray'>結算</span>"
+                            ]
 
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
 
                             fig_spark.update_layout(
-                                height=110, # 稍微加高給文字空間
-                                margin=dict(l=10, r=10, t=5, b=35), # 底部留白給 X 軸標籤
+                                height=110, # 增加高度給文字空間
+                                margin=dict(l=10, r=10, t=5, b=35), # 底部留白
                                 xaxis=dict(
-                                    visible=True, # 開啟 X 軸
-                                    range=x_range,
+                                    visible=True, # 必須開啟 X 軸
+                                    range=[session_start, session_end],
                                     fixedrange=True,
-                                    showgrid=False, # 不顯示網格
-                                    showline=False, # 不顯示軸線
+                                    showgrid=False,
+                                    showline=False,
                                     zeroline=False,
-                                    tickmode='array', # 指定刻度模式
-                                    tickvals=tick_vals, # 設定刻度位置
-                                    ticktext=tick_texts, # 設定刻度文字
-                                    side='bottom',
-                                    tickfont=dict(size=11)
+                                    tickmode='array',
+                                    tickvals=tick_vals,
+                                    ticktext=tick_texts,
+                                    tickfont=dict(size=11),
+                                    side='bottom'
                                 ),
                                 yaxis=dict(visible=False, range=[y_min, y_max], fixedrange=True),
                                 paper_bgcolor='rgba(0,0,0,0)',
@@ -382,9 +368,7 @@ if ticker_input:
                                 dragmode=False
                             )
 
-                    # 顯示價格卡片 (注意：這裡移除了原本的 timeline_html)
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
-                    
                     if not df_intra.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
                 
@@ -482,6 +466,7 @@ if ticker_input:
                         else:
                             with st.spinner("正在連線 AI 大腦..."):
                                 try:
+                                    # 自動尋找可用的模型
                                     valid_model_name = None
                                     for m in genai.list_models():
                                         if 'generateContent' in m.supported_generation_methods:
