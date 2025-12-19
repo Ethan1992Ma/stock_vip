@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, time
 import pytz
 import google.generativeai as genai
-import ta # 補回這行，避免 data/fetch.py 報錯
+import ta 
 
 # 匯入模組
 from ui.styles import apply_css, COLOR_UP, COLOR_DOWN, COLOR_NEUTRAL, VOL_EXPLODE, VOL_NORMAL, VOL_SHRINK, VOL_MA_LINE, COLOR_VWAP, MACD_BULL_GROW, MACD_BULL_SHRINK, MACD_BEAR_GROW, MACD_BEAR_SHRINK
@@ -24,7 +24,7 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.warning("⚠️ 請在 .streamlit/secrets.toml 設定 GEMINI_API_KEY 才能使用 AI 深度分析功能")
 
-# --- 技術分析計算模組 (純 Pandas 實作) ---
+# --- 技術分析計算模組 ---
 def generate_technical_context(df):
     if len(df) < 60: return "數據不足，略過技術分析。"
     df_calc = df.copy()
@@ -216,7 +216,7 @@ if ticker_input:
             # [計算指標]
             df = calculate_ma(df)
             
-            # 【關鍵新增】手動計算 10MA (以防 logic 模組沒算)
+            # 10MA
             if 'MA_10' not in df.columns:
                 df['MA_10'] = df['Close'].rolling(window=10).mean()
 
@@ -232,21 +232,29 @@ if ticker_input:
             with tab_analysis:
                 if not df_intra.empty:
                     df_intra = calculate_vwap(df_intra)
-                    
                     df_intra.index = pd.to_datetime(df_intra.index)
-                    if ".TW" in ticker_input:
-                        tz_str = 'Asia/Taipei'
-                        open_time, close_time = time(9, 0), time(13, 30)
-                    else:
-                        tz_str = 'America/New_York'
-                        open_time, close_time = time(9, 30), time(16, 0)
-                    try: df_intra_tz = df_intra.tz_convert(tz_str)
-                    except: df_intra_tz = df_intra
                     
-                    mask_reg_hl = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
-                    df_reg_hl = df_intra_tz[mask_reg_hl]
-                    day_high = df_reg_hl['High'].max() if not df_reg_hl.empty else df_intra_tz['High'].max()
-                    day_low = df_reg_hl['Low'].min() if not df_reg_hl.empty else df_intra_tz['Low'].min()
+                    # 判斷時區 (美股 vs 台股)
+                    is_us = ".TW" not in ticker_input
+                    if is_us:
+                        tz_str = 'America/New_York'
+                    else:
+                        tz_str = 'Asia/Taipei'
+                        
+                    # 處理時區轉換 (避免 Naive Timestamp 錯誤)
+                    if df_intra.index.tz is None:
+                        # 如果是 Naive，先假設為 UTC 再轉，或者如果是 yfinance 抓下來的通常要小心
+                        # 這裡做一個簡單的保護：先轉 UTC 再轉目標時區，或直接 localize
+                        try:
+                            df_intra_tz = df_intra.tz_localize('UTC').tz_convert(tz_str)
+                        except:
+                            df_intra_tz = df_intra.tz_localize(tz_str)
+                    else:
+                        df_intra_tz = df_intra.tz_convert(tz_str)
+                    
+                    # 準備數據
+                    day_high = df_intra_tz['High'].max()
+                    day_low = df_intra_tz['Low'].min()
                 
                 previous_close = info.get('previousClose', df.iloc[-2]['Close'])
                 regular_price = info.get('currentPrice', info.get('regularMarketPrice', last['Close']))
@@ -269,19 +277,17 @@ if ticker_input:
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     fig_spark = go.Figure()
-                    # 確保有資料
                     if not df_intra.empty:
                         # 1. 設定正規交易時段 (美股 09:30-16:00, 台股 09:00-13:30)
-                        is_us = ".TW" not in ticker_input
                         t_start = "09:30" if is_us else "09:00"
                         t_end = "16:00" if is_us else "13:30"
                         
-                        # 2. 【關鍵】使用 Pandas 強制過濾，只保留這段時間的數據
-                        # 這樣盤前盤後的數據會直接被丟棄，不會畫在圖上
+                        # 2. 【絕對過濾】直接刪除盤前盤後資料 (只保留 09:30~16:00)
+                        # 這會強制圖表只畫出這段時間，VWAP 也絕對不會溢出
                         df_plot = df_intra_tz.between_time(t_start, t_end).copy()
                         
                         if not df_plot.empty:
-                            # 3. 繪製 VWAP (如果有) - 此時數據已經乾淨了，不用擔心畫出去
+                            # 3. 繪製 VWAP (只在正規時間內)
                             if 'VWAP' in df_plot.columns:
                                 fig_spark.add_trace(go.Scatter(
                                     x=df_plot.index, y=df_plot['VWAP'], 
@@ -289,7 +295,7 @@ if ticker_input:
                                     name='VWAP', hoverinfo='skip'
                                 ))
                             
-                            # 4. 繪製股價走勢
+                            # 4. 繪製股價 (填色區域)
                             day_open = df_plot['Open'].iloc[0]
                             day_close = df_plot['Close'].iloc[-1]
                             line_color = COLOR_UP if day_close >= day_open else COLOR_DOWN
@@ -301,26 +307,21 @@ if ticker_input:
                                 fill='tozeroy', fillcolor=fill_color, hoverinfo='skip'
                             ))
                             
-                            # 5. 強制鎖定 X 軸範圍 (確保圖表左右邊緣切齊開收盤時間)
-                            # 取得當前數據的日期
+                            # 5. 強制鎖定 X 軸範圍 (確保左右對齊文字)
                             current_date = df_plot.index[0].date()
+                            tz_obj = pytz.timezone(tz_str)
                             
-                            if is_us:
-                                tz_obj = pytz.timezone('America/New_York')
-                                dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 30)))
-                                dt_end = tz_obj.localize(datetime.combine(current_date, time(16, 0)))
-                            else:
-                                tz_obj = pytz.timezone('Asia/Taipei')
-                                dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 0)))
-                                dt_end = tz_obj.localize(datetime.combine(current_date, time(13, 30)))
-
+                            # 建立當日的開盤與收盤時間點 (Datetime物件)
+                            dt_start_obj = tz_obj.localize(datetime.combine(current_date, time(9, 30) if is_us else time(9, 0)))
+                            dt_end_obj = tz_obj.localize(datetime.combine(current_date, time(16, 0) if is_us else time(13, 30)))
+                            
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
                             
                             fig_spark.update_layout(
                                 height=80, 
                                 margin=dict(l=0, r=40, t=5, b=5), 
-                                xaxis=dict(visible=False, range=[dt_start, dt_end]), # 鎖定 X 軸
+                                xaxis=dict(visible=False, range=[dt_start_obj, dt_end_obj]), # 這裡強制鎖定
                                 yaxis=dict(visible=False, range=[y_min, y_max]), 
                                 paper_bgcolor='rgba(0,0,0,0)', 
                                 plot_bgcolor='rgba(0,0,0,0)', 
@@ -328,7 +329,6 @@ if ticker_input:
                                 dragmode=False
                             )
 
-                    # 顯示價格卡片與圖表
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
                     if not df_intra.empty and not df_plot.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
@@ -365,12 +365,11 @@ if ticker_input:
                 chart_config = {'displayModeBar': False, 'scrollZoom': False}
 
                 # 1. K線圖 + 5, 10, 20, 60, 120 MA
-                st.markdown("<div class='chart-title'>📈 股價走勢 </div>", unsafe_allow_html=True)
+                st.markdown("<div class='chart-title'>📈 股價走勢</div>", unsafe_allow_html=True)
                 fig_price = go.Figure()
                 fig_price.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN, name='K線', showlegend=False))
                 
-                # 【關鍵修改】加入 10MA (藍色)，並更新列表
-                # 顏色順序：5(紫), 10(藍), 20(橘), 60(綠), 120(灰)
+                # 加入 10MA (藍色)
                 for m, c in zip([5, 10, 20, 60, 120], ['#D500F9', '#2962FF', '#FF6D00', '#00C853', '#78909C']): 
                     if f'MA_{m}' in df_chart.columns:
                         fig_price.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MA_{m}'], line=dict(color=c, width=1), name=f'MA{m}'))
@@ -429,7 +428,6 @@ if ticker_input:
                         else:
                             with st.spinner("正在連線 AI 大腦..."):
                                 try:
-                                    # 自動尋找可用的模型
                                     valid_model_name = None
                                     for m in genai.list_models():
                                         if 'generateContent' in m.supported_generation_methods:
@@ -446,7 +444,6 @@ if ticker_input:
                                     if not valid_model_name:
                                         valid_model_name = 'models/gemini-pro'
 
-                                    # 執行分析
                                     model = genai.GenerativeModel(valid_model_name)
                                     
                                     tech_insight = generate_technical_context(df)
