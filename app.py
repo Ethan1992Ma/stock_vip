@@ -338,35 +338,57 @@ if ticker_input:
                 df_chart = df[df.index >= cutoff].copy()
                 range_breaks = [dict(values=pd.date_range(start=df_chart.index[0], end=df_chart.index[-1]).difference(df_chart.index).strftime("%Y-%m-%d").tolist())]
 
+                # --- 設定通用的圖表 Config (防手殘設定) ---
+                chart_config = {'displayModeBar': False, 'scrollZoom': False}
+
+                # 1. K線圖
                 st.markdown("<div class='chart-title'>📈 股價走勢 & 均線</div>", unsafe_allow_html=True)
                 fig_price = go.Figure()
                 fig_price.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN, name='K線'))
                 for m, c in zip([5, 20, 60, 120], ['#D500F9', '#FF6D00', '#00C853', '#78909C']): 
                     fig_price.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MA_{m}'], line=dict(color=c, width=1), name=f'MA{m}'))
-                fig_price.update_layout(height=400, margin=dict(l=10,r=10,t=10,b=50), xaxis_rangeslider_visible=False, showlegend=True, template="plotly_white", legend=dict(orientation="h", yanchor="top", y=-0.1))
-                fig_price.update_xaxes(rangebreaks=range_breaks)
-                st.plotly_chart(fig_price, use_container_width=True)
+                
+                # [關鍵修改] 鎖定圖表，禁止拖曳與縮放
+                fig_price.update_layout(
+                    height=400, 
+                    margin=dict(l=10,r=10,t=10,b=50), 
+                    xaxis_rangeslider_visible=False, 
+                    showlegend=True, 
+                    template="plotly_white", 
+                    legend=dict(orientation="h", yanchor="top", y=-0.1),
+                    dragmode=False  # 禁止滑鼠拖曳
+                )
+                fig_price.update_xaxes(rangebreaks=range_breaks, fixedrange=True) # 鎖定 X 軸
+                fig_price.update_yaxes(fixedrange=True) # 鎖定 Y 軸
+                st.plotly_chart(fig_price, use_container_width=True, config=chart_config)
 
+                # 2. 成交量
                 st.markdown("<div class='chart-title'>📊 成交量</div>", unsafe_allow_html=True)
                 colors = [VOL_EXPLODE if (r['Volume']/(r['Vol_MA'] if r['Vol_MA']>0 else 1))>=2 else VOL_NORMAL if (r['Volume']/(r['Vol_MA'] if r['Vol_MA']>0 else 1))>=1 else VOL_SHRINK for _, r in df_chart.iterrows()]
                 fig_vol = go.Figure(data=[go.Bar(x=df_chart.index, y=df_chart['Volume'], marker_color=colors), go.Scatter(x=df_chart.index, y=df_chart['Vol_MA'], line=dict(color='black', width=1))])
-                fig_vol.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), showlegend=False, template="plotly_white")
-                fig_vol.update_xaxes(rangebreaks=range_breaks)
-                st.plotly_chart(fig_vol, use_container_width=True)
+                fig_vol.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), showlegend=False, template="plotly_white", dragmode=False)
+                fig_vol.update_xaxes(rangebreaks=range_breaks, fixedrange=True)
+                fig_vol.update_yaxes(fixedrange=True)
+                st.plotly_chart(fig_vol, use_container_width=True, config=chart_config)
 
+                # 3. RSI & MACD
                 c_rsi, c_macd = st.columns(2)
                 with c_rsi:
                     st.markdown("<div class='chart-title'>⚡ RSI 強弱指標</div>", unsafe_allow_html=True)
                     fig_rsi = go.Figure(go.Scatter(x=df_chart.index, y=df_chart['RSI'], line=dict(color='#9C27B0')))
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color=COLOR_DOWN); fig_rsi.add_hline(y=30, line_dash="dash", line_color=COLOR_UP)
-                    fig_rsi.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), template="plotly_white"); fig_rsi.update_xaxes(rangebreaks=range_breaks)
-                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    fig_rsi.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), template="plotly_white", dragmode=False)
+                    fig_rsi.update_xaxes(rangebreaks=range_breaks, fixedrange=True)
+                    fig_rsi.update_yaxes(fixedrange=True)
+                    st.plotly_chart(fig_rsi, use_container_width=True, config=chart_config)
                 with c_macd:
                     st.markdown("<div class='chart-title'>🌊 MACD 趨勢指標</div>", unsafe_allow_html=True)
                     hist_data = df_chart['Hist']
                     fig_macd = go.Figure([go.Scatter(x=df_chart.index, y=df_chart['MACD'], line=dict(color='#2196F3')), go.Scatter(x=df_chart.index, y=df_chart['Signal'], line=dict(color='#FF5722')), go.Bar(x=df_chart.index, y=hist_data, marker_color=[(MACD_BULL_GROW if h>0 else MACD_BEAR_GROW) for h in hist_data])])
-                    fig_macd.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), showlegend=False, template="plotly_white"); fig_macd.update_xaxes(rangebreaks=range_breaks)
-                    st.plotly_chart(fig_macd, use_container_width=True)
+                    fig_macd.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), showlegend=False, template="plotly_white", dragmode=False)
+                    fig_macd.update_xaxes(rangebreaks=range_breaks, fixedrange=True)
+                    fig_macd.update_yaxes(fixedrange=True)
+                    st.plotly_chart(fig_macd, use_container_width=True, config=chart_config)
                 
                 st.markdown(f"""<div class="ai-summary-card"><div class="ai-title">🔎 綜合指標速覽</div><div class="ai-content">{ai_data['suggestion']}</div></div>""", unsafe_allow_html=True)
                 
@@ -381,35 +403,28 @@ if ticker_input:
                         else:
                             with st.spinner("正在連線 AI 大腦..."):
                                 try:
-                                    # --- 1. 自動尋找可用的模型 (關鍵修改) ---
+                                    # --- 1. 自動尋找可用的模型 ---
                                     valid_model_name = None
-                                    # 列出所有可用的模型
                                     for m in genai.list_models():
                                         if 'generateContent' in m.supported_generation_methods:
-                                            # 優先尋找 flash 模型 (速度快)
                                             if 'flash' in m.name:
                                                 valid_model_name = m.name
                                                 break
                                     
-                                    # 如果沒找到 flash，就找 pro (通用)
                                     if not valid_model_name:
                                         for m in genai.list_models():
                                             if 'gemini-pro' in m.name:
                                                 valid_model_name = m.name
                                                 break
                                     
-                                    # 如果真的都找不到，就預設一個
                                     if not valid_model_name:
                                         valid_model_name = 'models/gemini-pro'
 
                                     # --- 2. 執行分析 ---
-                                    # st.toast(f"已連接模型：{valid_model_name}") # (除錯用，可不加)
                                     model = genai.GenerativeModel(valid_model_name)
                                     
-                                    # 產生秘密技術數據 (Context)
                                     tech_insight = generate_technical_context(df)
                                     
-                                    # 準備 Prompt
                                     prompt = f"""
                                     你是華爾街頂級交易員。請分析股票 {ticker_input} ({info.get('longName', '')})。
                                     
