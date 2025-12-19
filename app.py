@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, time
 import pytz
 import google.generativeai as genai
+import ta # 補回這行，避免 data/fetch.py 報錯
 
 # 匯入模組
 from ui.styles import apply_css, COLOR_UP, COLOR_DOWN, COLOR_NEUTRAL, VOL_EXPLODE, VOL_NORMAL, VOL_SHRINK, VOL_MA_LINE, COLOR_VWAP, MACD_BULL_GROW, MACD_BULL_SHRINK, MACD_BEAR_GROW, MACD_BEAR_SHRINK
@@ -23,38 +24,28 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.warning("⚠️ 請在 .streamlit/secrets.toml 設定 GEMINI_API_KEY 才能使用 AI 深度分析功能")
 
-# --- [修正] 技術分析計算模組 (純 Pandas 實作，免安裝 pandas_ta) ---
+# --- 技術分析計算模組 (純 Pandas 實作) ---
 def generate_technical_context(df):
-    """
-    輸入：股票 DataFrame
-    輸出：一段給 AI 看的『秘密數據』
-    """
     if len(df) < 60: return "數據不足，略過技術分析。"
-
-    # 使用副本計算，避免影響主圖表
     df_calc = df.copy()
     close = df_calc['Close']
 
-    # 1. 手動計算指標 (不依賴外部庫)
-    # SMA (均線)
+    # 手動計算指標
     sma20_series = close.rolling(window=20).mean()
     sma60_series = close.rolling(window=60).mean()
     
-    # RSI (相對強弱指標) - 使用 Wilder's Smoothing
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
     rs = gain / loss
     rsi_series = 100 - (100 / (1 + rs))
 
-    # MACD (指數平滑異同移動平均線)
     exp12 = close.ewm(span=12, adjust=False).mean()
     exp26 = close.ewm(span=26, adjust=False).mean()
     macd_line = exp12 - exp26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     macd_hist = macd_line - signal_line
 
-    # 取得最新與前一日數據
     price = close.iloc[-1]
     sma20 = sma20_series.iloc[-1]
     sma60 = sma60_series.iloc[-1]
@@ -63,10 +54,7 @@ def generate_technical_context(df):
     cur_hist = macd_hist.iloc[-1]
     prev_hist = macd_hist.iloc[-2]
 
-    # 2. 生成描述報告
     report = []
-    
-    # [均線與趨勢]
     if price > sma20:
         report.append(f"股價 ({price:.2f}) 站上月線 (20MA: {sma20:.2f})，短線轉強。")
     else:
@@ -77,7 +65,6 @@ def generate_technical_context(df):
     else:
         report.append("月線小於季線，中長期均線呈現空頭或整理格局。")
 
-    # [RSI]
     if rsi > 70:
         report.append(f"RSI 指標 ({rsi:.2f}) 進入超買區，需留意高檔鈍化或回調風險。")
     elif rsi < 30:
@@ -85,7 +72,6 @@ def generate_technical_context(df):
     else:
         report.append(f"RSI 指標 ({rsi:.2f}) 處於中性區間。")
 
-    # [MACD]
     if cur_hist > 0 and cur_hist > prev_hist:
         report.append("MACD 紅柱持續放大，多頭動能強勁。")
     elif cur_hist > 0 and cur_hist < prev_hist:
@@ -124,7 +110,6 @@ def render_calculator_tab(current_close_price, exchange_rate, quote_type):
     st.markdown(f'<div class="fee-badge">{fees["text"]}</div>', unsafe_allow_html=True)
     st.info(f"💰 目前匯率參考：**1 USD ≈ {exchange_rate:.2f} TWD**")
 
-    # 1. 購買力試算
     with st.container():
         st.markdown('<div class="calc-header">💰 預算試算 (我有多少錢?)</div>', unsafe_allow_html=True)
         bc1, bc2 = st.columns(2)
@@ -144,7 +129,6 @@ def render_calculator_tab(current_close_price, exchange_rate, quote_type):
     
     st.markdown("---")
 
-    # 2. 賣出試算
     with st.container():
         st.markdown('<div class="calc-header">⚖️ 賣出試算 (獲利預估)</div>', unsafe_allow_html=True)
         c_input1, c_input2 = st.columns(2)
@@ -231,6 +215,11 @@ if ticker_input:
             
             # [計算指標]
             df = calculate_ma(df)
+            
+            # 【關鍵新增】手動計算 10MA (以防 logic 模組沒算)
+            if 'MA_10' not in df.columns:
+                df['MA_10'] = df['Close'].rolling(window=10).mean()
+
             df = calculate_bollinger(df)
             
             last = df.iloc[-1]
@@ -328,7 +317,7 @@ if ticker_input:
 
                 st.markdown("#### 📏 關鍵均線監控")
                 ma_list = [5, 10, 20, 30, 60, 120, 200]
-                ma_html = "".join([f'<div class="ma-box"><div class="ma-label">MA {d}</div><div class="ma-val {"txt-up-vip" if last[f"MA_{d}"] > prev[f"MA_{d}"] else "txt-down-vip"}">{last[f"MA_{d}"]:.2f} {"▲" if last[f"MA_{d}"] > prev[f"MA_{d}"] else "▼"}</div></div>' for d in ma_list])
+                ma_html = "".join([f'<div class="ma-box"><div class="ma-label">MA {d}</div><div class="ma-val {"txt-up-vip" if last.get(f"MA_{d}", 0) > prev.get(f"MA_{d}", 0) else "txt-down-vip"}">{last.get(f"MA_{d}", 0):.2f} {"▲" if last.get(f"MA_{d}", 0) > prev.get(f"MA_{d}", 0) else "▼"}</div></div>' for d in ma_list])
                 st.markdown(f'<div class="ma-container">{ma_html}</div>', unsafe_allow_html=True)
 
                 st.markdown("#### 📉 技術分析")
@@ -341,14 +330,17 @@ if ticker_input:
                 # --- 設定通用的圖表 Config (防手殘設定) ---
                 chart_config = {'displayModeBar': False, 'scrollZoom': False}
 
-                # 1. K線圖
-                st.markdown("<div class='chart-title'>📈 股價走勢 & 均線</div>", unsafe_allow_html=True)
+                # 1. K線圖 + 5, 10, 20, 60, 120 MA
+                st.markdown("<div class='chart-title'>📈 股價走勢 & 均線 (5/10/20/60/120)</div>", unsafe_allow_html=True)
                 fig_price = go.Figure()
                 fig_price.add_trace(go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], increasing_line_color=COLOR_UP, decreasing_line_color=COLOR_DOWN, name='K線'))
-                for m, c in zip([5, 20, 60, 120], ['#D500F9', '#FF6D00', '#00C853', '#78909C']): 
-                    fig_price.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MA_{m}'], line=dict(color=c, width=1), name=f'MA{m}'))
                 
-                # [關鍵修改] 鎖定圖表，禁止拖曳與縮放
+                # 【關鍵修改】加入 10MA (藍色)，並更新列表
+                # 顏色順序：5(紫), 10(藍), 20(橘), 60(綠), 120(灰)
+                for m, c in zip([5, 10, 20, 60, 120], ['#D500F9', '#2962FF', '#FF6D00', '#00C853', '#78909C']): 
+                    if f'MA_{m}' in df_chart.columns:
+                        fig_price.add_trace(go.Scatter(x=df_chart.index, y=df_chart[f'MA_{m}'], line=dict(color=c, width=1), name=f'MA{m}'))
+                
                 fig_price.update_layout(
                     height=400, 
                     margin=dict(l=10,r=10,t=10,b=50), 
@@ -358,8 +350,8 @@ if ticker_input:
                     legend=dict(orientation="h", yanchor="top", y=-0.1),
                     dragmode=False  # 禁止滑鼠拖曳
                 )
-                fig_price.update_xaxes(rangebreaks=range_breaks, fixedrange=True) # 鎖定 X 軸
-                fig_price.update_yaxes(fixedrange=True) # 鎖定 Y 軸
+                fig_price.update_xaxes(rangebreaks=range_breaks, fixedrange=True) 
+                fig_price.update_yaxes(fixedrange=True)
                 st.plotly_chart(fig_price, use_container_width=True, config=chart_config)
 
                 # 2. 成交量
@@ -392,7 +384,7 @@ if ticker_input:
                 
                 st.markdown(f"""<div class="ai-summary-card"><div class="ai-title">🔎 綜合指標速覽</div><div class="ai-content">{ai_data['suggestion']}</div></div>""", unsafe_allow_html=True)
                 
-                # --- [新增] Gemini 深度 AI 分析區塊 ---
+                # --- Gemini 深度 AI 分析區塊 ---
                 st.markdown("---")
                 st.subheader("🤖 Gemini 深度戰略分析")
                 
@@ -403,7 +395,7 @@ if ticker_input:
                         else:
                             with st.spinner("正在連線 AI 大腦..."):
                                 try:
-                                    # --- 1. 自動尋找可用的模型 ---
+                                    # 自動尋找可用的模型
                                     valid_model_name = None
                                     for m in genai.list_models():
                                         if 'generateContent' in m.supported_generation_methods:
@@ -420,7 +412,7 @@ if ticker_input:
                                     if not valid_model_name:
                                         valid_model_name = 'models/gemini-pro'
 
-                                    # --- 2. 執行分析 ---
+                                    # 執行分析
                                     model = genai.GenerativeModel(valid_model_name)
                                     
                                     tech_insight = generate_technical_context(df)
