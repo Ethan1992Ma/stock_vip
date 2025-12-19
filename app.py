@@ -268,14 +268,24 @@ if ticker_input:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
+                    with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
-                        fig_spark.add_trace(go.Scatter(x=df_intra_tz.index, y=df_intra_tz['Close'], mode='lines', line=dict(color='#bdc3c7', width=1.5, dash='dot'), hoverinfo='skip'))
-                        if 'VWAP' in df_intra_tz.columns:
-                            fig_spark.add_trace(go.Scatter(x=df_intra_tz.index, y=df_intra_tz['VWAP'], mode='lines', line=dict(color=COLOR_VWAP, width=1.5), name='VWAP', hoverinfo='skip'))
+                        # 定義正規交易時間遮罩 (用於篩選數據)
+                        mask_reg = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
                         
-                        mask = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
-                        df_regular = df_intra_tz[mask]
+                        # 1. 繪製灰色虛線 (盤前/盤後數據 - 雖然範圍被裁切但保留邏輯)
+                        fig_spark.add_trace(go.Scatter(x=df_intra_tz.index, y=df_intra_tz['Close'], mode='lines', line=dict(color='#bdc3c7', width=1.5, dash='dot'), hoverinfo='skip'))
+                        
+                        # 2. [修正] 繪製 VWAP (只顯示正規交易時間內)
+                        if 'VWAP' in df_intra_tz.columns:
+                            # 只取正規時間內的 VWAP
+                            df_vwap = df_intra_tz[mask_reg]
+                            if not df_vwap.empty:
+                                fig_spark.add_trace(go.Scatter(x=df_vwap.index, y=df_vwap['VWAP'], mode='lines', line=dict(color=COLOR_VWAP, width=1.5), name='VWAP', hoverinfo='skip'))
+                        
+                        # 3. 繪製正規盤 (彩色實線 + 填充)
+                        df_regular = df_intra_tz[mask_reg]
                         if not df_regular.empty:
                             day_open_reg = df_regular['Open'].iloc[0]
                             day_close_reg = df_regular['Close'].iloc[-1]
@@ -283,13 +293,16 @@ if ticker_input:
                             fill_color = "rgba(5, 154, 129, 0.15)" if day_close_reg >= day_open_reg else "rgba(242, 54, 69, 0.15)"
                             fig_spark.add_trace(go.Scatter(x=df_regular.index, y=df_regular['Close'], mode='lines', line=dict(color=spark_color, width=2), fill='tozeroy', fillcolor=fill_color))
 
+                        # [修正] 設定 X 軸範圍，強制鎖定在正規交易時間，解決對齊問題
                         if ".TW" not in ticker_input:
                             current_date = df_intra_tz.index[0].date()
                             tz_ny = pytz.timezone('America/New_York')
-                            dt_start = tz_ny.localize(datetime.combine(current_date, time(4, 0)))
-                            dt_end = tz_ny.localize(datetime.combine(current_date, time(20, 0)))
+                            # 修改範圍：從 04:00~20:00 改為 09:30~16:00 (剛好對齊開收盤文字)
+                            dt_start = tz_ny.localize(datetime.combine(current_date, time(9, 30)))
+                            dt_end = tz_ny.localize(datetime.combine(current_date, time(16, 0)))
                             fig_spark.update_layout(xaxis=dict(range=[dt_start, dt_end], visible=False))
                         else:
+                            # 台股維持自動或固定範圍 (台股通常數據本身就是 09:00-13:30)
                             fig_spark.update_layout(xaxis=dict(visible=False))
 
                         y_min, y_max = day_low * 0.999, day_high * 1.001
