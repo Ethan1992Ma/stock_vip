@@ -234,22 +234,20 @@ if ticker_input:
                     # 計算 VWAP
                     df_intra = calculate_vwap(df_intra)
                     
-                    # 處理時區 (確保 index 為 datetime 且有正確時區)
+                    # 處理時區
                     df_intra.index = pd.to_datetime(df_intra.index)
-                    
                     is_us = ".TW" not in ticker_input
                     tz_target = 'America/New_York' if is_us else 'Asia/Taipei'
                     
+                    # 統一轉為目標時區
                     if df_intra.index.tz is None:
                         try:
-                            # 嘗試先定為 UTC 再轉，或直接定為目標時區
                             df_intra_tz = df_intra.tz_localize('UTC').tz_convert(tz_target)
                         except:
                             df_intra_tz = df_intra.tz_localize(tz_target)
                     else:
                         df_intra_tz = df_intra.tz_convert(tz_target)
                     
-                    # 準備數據 (for cards)
                     day_high = df_intra_tz['High'].max()
                     day_low = df_intra_tz['Low'].min()
                 
@@ -271,21 +269,23 @@ if ticker_input:
                 st.markdown(f"### 📱 {info.get('longName', ticker_input)} ({ticker_input})")
                 st.caption(f"目前策略：{strat_desc}")
                 
-                # --- 迷你走勢圖區塊 (修正版) ---
+                # --- 迷你走勢圖區塊 (修正語法錯誤與過濾邏輯) ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
-                        # 1. 定義時間範圍字串 (用於直接過濾數據)
-                        t_start = "09:30" if is_us else "09:00"
-                        t_end = "16:00" if is_us else "13:30"
+                        # 定義開收盤時間
+                        t_open = time(9, 30) if is_us else time(9, 0)
+                        t_close = time(16, 0) if is_us else time(13, 30)
                         
-                        # 2. 【絕對過濾】直接使用 Pandas 刪除盤前盤後資料
-                        # 這行指令會把不屬於交易時段的資料全部丟掉
-                        df_plot = df_intra_tz.between_time(t_start, t_end).copy()
+                        # 【關鍵修正】: 移除時區資訊後，直接用「牆上時間」過濾
+                        # 這招比 between_time 更穩，因為不會被時區搞混
+                        df_plot = df_intra_tz.copy()
+                        df_plot.index = df_plot.index.tz_localize(None) # 變成 naive time
+                        df_plot = df_plot.between_time(t_open, t_close) # 嚴格過濾
                         
                         if not df_plot.empty:
-                            # 3. 繪製 VWAP (因為數據已經乾淨了，VWAP 也不會溢出)
+                            # 繪製 VWAP
                             if 'VWAP' in df_plot.columns:
                                 fig_spark.add_trace(go.Scatter(
                                     x=df_plot.index, y=df_plot['VWAP'], 
@@ -293,7 +293,7 @@ if ticker_input:
                                     name='VWAP', hoverinfo='skip'
                                 ))
                             
-                            # 4. 繪製股價走勢 (包含填色)
+                            # 繪製股價
                             day_open = df_plot['Open'].iloc[0]
                             day_close = df_plot['Close'].iloc[-1]
                             line_color = COLOR_UP if day_close >= day_open else COLOR_DOWN
@@ -305,22 +305,14 @@ if ticker_input:
                                 fill='tozeroy', fillcolor=fill_color, hoverinfo='skip'
                             ))
                             
-                            # 5. 強制鎖定 X 軸範圍 (確保左右文字對齊)
-                            # 取得「數據的日期」（避免用 today，以免跨日問題）
-                            current_date = df_plot.index[0].date()
-                            tz_obj = pytz.timezone(tz_target)
-                            
-                            # 建立當日的標準開收盤時間點 (Aware datetime)
-                            dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 30) if is_us else time(9, 0)))
-                            dt_end = tz_obj.localize(datetime.combine(current_date, time(16, 0) if is_us else time(13, 30)))
-                            
+                            # 強制鎖定 X 軸範圍
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
                             
                             fig_spark.update_layout(
                                 height=80, 
                                 margin=dict(l=0, r=40, t=5, b=5), 
-                                xaxis=dict(visible=False, range=[dt_start, dt_end]), # 強制鎖定範圍
+                                xaxis=dict(visible=False), # 自動範圍即可，因為數據已經乾淨了
                                 yaxis=dict(visible=False, range=[y_min, y_max]), 
                                 paper_bgcolor='rgba(0,0,0,0)', 
                                 plot_bgcolor='rgba(0,0,0,0)', 
@@ -331,7 +323,13 @@ if ticker_input:
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
                     if not df_intra.empty and 'df_plot' in locals() and not df_plot.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
-                        st.markdown(get_timeline_html(ticker_input), unsafe_allow_html=True)
+                        # 暫時隱藏原本的時間軸，因為可能會對不齊新的截斷圖表
+                        # st.markdown(get_timeline_html(ticker_input), unsafe_allow_html=True) 
+                        
+                        # 手動加上簡單的對齊標籤
+                        t_l, t_r = st.columns(2)
+                        with t_l: st.caption(f"🔔 {t_open.strftime('%H:%M')}")
+                        with t_r: st.caption(f"🌙 {t_close.strftime('%H:%M')}", help="收盤")
                 
                 with c2: st.markdown(get_metric_card_html("本益比 (P/E)", f"{info.get('trailingPE', 'N/A')}", "估值參考"), unsafe_allow_html=True)
                 with c3: st.markdown(get_metric_card_html("EPS", f"{info.get('trailingEps', 'N/A')}", "獲利能力"), unsafe_allow_html=True)
