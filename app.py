@@ -275,46 +275,42 @@ if ticker_input:
                     fig_spark = go.Figure()
                     
                     if not df_intra.empty:
-                        # --- 1. 時間處理與過濾 (核心邏輯) ---
-                        # 轉換為台灣時間
+                        # --- 1. 時間轉換 (轉台灣時間) ---
                         tz_tw = pytz.timezone('Asia/Taipei')
                         if df_intra.index.tz is None:
-                            # 假設原始數據是 UTC (yfinance 特性)
                             df_plot = df_intra.tz_localize('UTC').tz_convert(tz_tw)
                         else:
                             df_plot = df_intra.tz_convert(tz_tw)
 
+                        # --- 2. 定義交易日範圍 (17:00 ~ 隔日 09:00) ---
                         # 取得最新一筆數據的時間，推算「當前交易日」的起始點
-                        # 邏輯：如果現在是早上 08:00，那交易日是「昨天下午 17:00」開始的
                         last_dt = df_plot.index[-1]
-                        if last_dt.hour < 12: # 比如現在是凌晨 04:00
+                        if last_dt.hour < 12: # 凌晨/早上 -> 交易日從昨天 17:00 開始
                             session_start = (last_dt - pd.Timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
-                        else: # 現在是晚上 20:00
+                        else: # 下午/晚上 -> 交易日從今天 17:00 開始
                             session_start = last_dt.replace(hour=17, minute=0, second=0, microsecond=0)
                         
-                        session_end = session_start + pd.Timedelta(hours=16) # 17:00 + 16hr = 隔天 09:00
+                        session_end = session_start + pd.Timedelta(hours=16) # 隔天 09:00 結束
 
-                        # 只保留本場交易時段的數據 (17:00 ~ 隔天 09:00)
+                        # 定義正規盤 (冬令時: 22:30 - 05:00)
+                        # 注意：這裡使用 +timedelta 確保跨日正確
+                        reg_start = session_start.replace(hour=22, minute=30)
+                        reg_end = session_start + pd.Timedelta(days=1).replace(hour=5, minute=0, second=0, microsecond=0)
+
+                        # 篩選數據：只保留本場次 (17:00 ~ 09:00)
                         df_plot = df_plot[(df_plot.index >= session_start) & (df_plot.index <= session_end)]
 
                         if not df_plot.empty:
-                            # 定義正規交易時間 (冬令時: 22:30 - 05:00)
-                            # 透過建立完整的 datetime 物件來比較，避免跨日問題
-                            reg_start = session_start.replace(hour=22, minute=30)
-                            reg_end = session_start + pd.Timedelta(days=1)
-                            reg_end = reg_end.replace(hour=5, minute=0)
-
-                            # 分割數據：正規盤 vs 全時段
+                            # 分割出正規盤數據 (用於填色)
                             df_reg = df_plot[(df_plot.index >= reg_start) & (df_plot.index <= reg_end)]
 
-                            # --- 2. 繪圖圖層 (Layer) ---
+                            # --- 3. 繪圖層 (Layers) ---
                             
-                            # Layer A: 背景全時段 (盤前盤後) -> 灰色虛線
-                            # 這條線畫滿全程，當作背景參考
+                            # Layer A: 全時段背景 (灰色虛線)
                             fig_spark.add_trace(go.Scatter(
                                 x=df_plot.index, y=df_plot['Close'],
                                 mode='lines',
-                                line=dict(color='#cfd8dc', width=1.5, dash='dot'), # 淺灰色虛線
+                                line=dict(color='#cfd8dc', width=1.5, dash='dot'),
                                 hoverinfo='skip'
                             ))
 
@@ -342,18 +338,42 @@ if ticker_input:
                                         name='VWAP', hoverinfo='skip'
                                     ))
 
-                            # --- 3. 版面設定 (關鍵：鎖定時間軸) ---
-                            # 計算 Y 軸範圍 (避免被離群值拉壞)
+                            # --- 4. 座標軸設定 (關鍵：用 X 軸刻度取代 HTML) ---
+                            # 台股與美股分開處理
+                            if ".TW" not in ticker_input:
+                                # 美股：設定 4 個關鍵時間點
+                                tick_vals = [session_start, reg_start, reg_end, session_end]
+                                tick_texts = [
+                                    "17:00<br><span style='font-size:9px; color:gray'>盤前</span>",
+                                    "🔔22:30<br><span style='font-size:9px; color:gray'>開盤</span>",
+                                    "🌙05:00<br><span style='font-size:9px; color:gray'>收盤</span>",
+                                    "09:00<br><span style='font-size:9px; color:gray'>結算</span>"
+                                ]
+                                x_range = [session_start, session_end]
+                            else:
+                                # 台股 (簡單處理)
+                                tick_vals = None 
+                                tick_texts = None
+                                x_range = None
+
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
 
                             fig_spark.update_layout(
-                                height=80,
-                                margin=dict(l=0, r=0, t=5, b=5), # 邊距歸零
+                                height=110, # 稍微加高給文字空間
+                                margin=dict(l=10, r=10, t=5, b=35), # 底部留白給 X 軸標籤
                                 xaxis=dict(
-                                    visible=False, 
-                                    range=[session_start, session_end], # 強制鎖定 17:00 - 09:00
-                                    fixedrange=True
+                                    visible=True, # 開啟 X 軸
+                                    range=x_range,
+                                    fixedrange=True,
+                                    showgrid=False, # 不顯示網格
+                                    showline=False, # 不顯示軸線
+                                    zeroline=False,
+                                    tickmode='array', # 指定刻度模式
+                                    tickvals=tick_vals, # 設定刻度位置
+                                    ticktext=tick_texts, # 設定刻度文字
+                                    side='bottom',
+                                    tickfont=dict(size=11)
                                 ),
                                 yaxis=dict(visible=False, range=[y_min, y_max], fixedrange=True),
                                 paper_bgcolor='rgba(0,0,0,0)',
@@ -362,24 +382,11 @@ if ticker_input:
                                 dragmode=False
                             )
 
-                    # --- 4. 下方文字標籤 (HTML) ---
-                    # 重新寫一個符合你要求的時間軸標籤 HTML
-                    price_card_html = get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct)
-                    st.markdown(price_card_html, unsafe_allow_html=True)
+                    # 顯示價格卡片 (注意：這裡移除了原本的 timeline_html)
+                    st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
                     
                     if not df_intra.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
-                        
-                        # 自定義時間軸 HTML (符合 17:00, 22:30, 05:00, 09:00)
-                        timeline_html = """
-                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #888; margin-top: -10px; padding-left: 2px; padding-right: 2px;">
-                            <div style="text-align: left;">17:00<br><span style="font-size:0.6rem">盤前</span></div>
-                            <div style="text-align: center; transform: translateX(-10%);">🔔 22:30<br><span style="font-size:0.6rem">開盤</span></div>
-                            <div style="text-align: center; transform: translateX(10%);">🌙 05:00<br><span style="font-size:0.6rem">收盤</span></div>
-                            <div style="text-align: right;">09:00<br><span style="font-size:0.6rem">結算</span></div>
-                        </div>
-                        """
-                        st.markdown(timeline_html, unsafe_allow_html=True)
                 
                 with c2: st.markdown(get_metric_card_html("本益比 (P/E)", f"{info.get('trailingPE', 'N/A')}", "估值參考"), unsafe_allow_html=True)
                 with c3: st.markdown(get_metric_card_html("EPS", f"{info.get('trailingEps', 'N/A')}", "獲利能力"), unsafe_allow_html=True)
