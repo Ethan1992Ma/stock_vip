@@ -269,86 +269,68 @@ if ticker_input:
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     fig_spark = go.Figure()
+                    # 確保有資料
                     if not df_intra.empty:
-                        # --- 關鍵修正開始 ---
+                        # 1. 設定正規交易時段 (美股 09:30-16:00, 台股 09:00-13:30)
+                        is_us = ".TW" not in ticker_input
+                        t_start = "09:30" if is_us else "09:00"
+                        t_end = "16:00" if is_us else "13:30"
                         
-                        # 1. 定義時間篩選器 (只取正規交易時間 09:30-16:00)
-                        # 這會產生一個 True/False 的遮罩 (Mask)
-                        mask_reg = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
+                        # 2. 【關鍵】使用 Pandas 強制過濾，只保留這段時間的數據
+                        # 這樣盤前盤後的數據會直接被丟棄，不會畫在圖上
+                        df_plot = df_intra_tz.between_time(t_start, t_end).copy()
                         
-                        # 2. 繪製灰色虛線 (盤前/盤後數據)
-                        # 這一層畫全部數據，但用虛線，讓它在背景當參考
-                        fig_spark.add_trace(go.Scatter(
-                            x=df_intra_tz.index, 
-                            y=df_intra_tz['Close'], 
-                            mode='lines', 
-                            line=dict(color='#bdc3c7', width=1.5, dash='dot'), 
-                            hoverinfo='skip'
-                        ))
-                        
-                        # 3. [修正] 繪製 VWAP (只顯示正規交易時間內)
-                        if 'VWAP' in df_intra_tz.columns:
-                            # 利用遮罩只取出「盤中」的 VWAP
-                            df_vwap = df_intra_tz[mask_reg]
-                            if not df_vwap.empty:
+                        if not df_plot.empty:
+                            # 3. 繪製 VWAP (如果有) - 此時數據已經乾淨了，不用擔心畫出去
+                            if 'VWAP' in df_plot.columns:
                                 fig_spark.add_trace(go.Scatter(
-                                    x=df_vwap.index, 
-                                    y=df_vwap['VWAP'], 
-                                    mode='lines', 
-                                    line=dict(color=COLOR_VWAP, width=1.5), 
-                                    name='VWAP', 
-                                    hoverinfo='skip'
+                                    x=df_plot.index, y=df_plot['VWAP'], 
+                                    mode='lines', line=dict(color=COLOR_VWAP, width=1.5), 
+                                    name='VWAP', hoverinfo='skip'
                                 ))
-                        
-                        # 4. 繪製正規盤走勢 (彩色實線 + 填充區域)
-                        # 利用遮罩只取出「盤中」的股價，這樣填充顏色就不會溢出到盤前盤後
-                        df_regular = df_intra_tz[mask_reg]
-                        if not df_regular.empty:
-                            day_open_reg = df_regular['Open'].iloc[0]
-                            day_close_reg = df_regular['Close'].iloc[-1]
-                            spark_color = COLOR_UP if day_close_reg >= day_open_reg else COLOR_DOWN
-                            # 設定填充顏色
-                            fill_color = "rgba(5, 154, 129, 0.15)" if day_close_reg >= day_open_reg else "rgba(242, 54, 69, 0.15)"
+                            
+                            # 4. 繪製股價走勢
+                            day_open = df_plot['Open'].iloc[0]
+                            day_close = df_plot['Close'].iloc[-1]
+                            line_color = COLOR_UP if day_close >= day_open else COLOR_DOWN
+                            fill_color = "rgba(5, 154, 129, 0.15)" if day_close >= day_open else "rgba(242, 54, 69, 0.15)"
                             
                             fig_spark.add_trace(go.Scatter(
-                                x=df_regular.index, 
-                                y=df_regular['Close'], 
-                                mode='lines', 
-                                line=dict(color=spark_color, width=2), 
-                                fill='tozeroy', 
-                                fillcolor=fill_color
+                                x=df_plot.index, y=df_plot['Close'], 
+                                mode='lines', line=dict(color=line_color, width=2), 
+                                fill='tozeroy', fillcolor=fill_color, hoverinfo='skip'
                             ))
-
-                        # 5. [修正] 強制鎖定 X 軸範圍 (解決對齊問題)
-                        # 這樣圖表的左邊緣就會剛好是 09:30，右邊緣是 16:00
-                        # 剛好對齊下方的「開盤」與「收盤」文字
-                        if ".TW" not in ticker_input:
-                            current_date = df_intra_tz.index[0].date()
-                            tz_ny = pytz.timezone('America/New_York')
                             
-                            # 設定範圍：09:30 ~ 16:00
-                            dt_start = tz_ny.localize(datetime.combine(current_date, time(9, 30)))
-                            dt_end = tz_ny.localize(datetime.combine(current_date, time(16, 0)))
+                            # 5. 強制鎖定 X 軸範圍 (確保圖表左右邊緣切齊開收盤時間)
+                            # 取得當前數據的日期
+                            current_date = df_plot.index[0].date()
                             
-                            fig_spark.update_layout(xaxis=dict(range=[dt_start, dt_end], visible=False))
-                        else:
-                            # 台股維持自動 (因為台股數據通常本身就是 09:00-13:30)
-                            fig_spark.update_layout(xaxis=dict(visible=False))
+                            if is_us:
+                                tz_obj = pytz.timezone('America/New_York')
+                                dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 30)))
+                                dt_end = tz_obj.localize(datetime.combine(current_date, time(16, 0)))
+                            else:
+                                tz_obj = pytz.timezone('Asia/Taipei')
+                                dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 0)))
+                                dt_end = tz_obj.localize(datetime.combine(current_date, time(13, 30)))
 
-                        # 設定 Y 軸與邊距
-                        y_min, y_max = day_low * 0.999, day_high * 1.001
-                        fig_spark.update_layout(
-                            height=80, 
-                            margin=dict(l=0, r=40, t=5, b=5), 
-                            yaxis=dict(visible=False, range=[y_min, y_max]), 
-                            paper_bgcolor='rgba(0,0,0,0)', 
-                            plot_bgcolor='rgba(0,0,0,0)', 
-                            showlegend=False, 
-                            dragmode=False
-                        )
+                            y_min = df_plot['Low'].min() * 0.999
+                            y_max = df_plot['High'].max() * 1.001
+                            
+                            fig_spark.update_layout(
+                                height=80, 
+                                margin=dict(l=0, r=40, t=5, b=5), 
+                                xaxis=dict(visible=False, range=[dt_start, dt_end]), # 鎖定 X 軸
+                                yaxis=dict(visible=False, range=[y_min, y_max]), 
+                                paper_bgcolor='rgba(0,0,0,0)', 
+                                plot_bgcolor='rgba(0,0,0,0)', 
+                                showlegend=False, 
+                                dragmode=False
+                            )
 
+                    # 顯示價格卡片與圖表
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
-                    if not df_intra.empty:
+                    if not df_intra.empty and not df_plot.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
                         st.markdown(get_timeline_html(ticker_input), unsafe_allow_html=True)
                 
