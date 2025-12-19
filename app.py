@@ -270,42 +270,82 @@ if ticker_input:
                 with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
-                        # 定義正規交易時間遮罩 (用於篩選數據)
+                        # --- 關鍵修正開始 ---
+                        
+                        # 1. 定義時間篩選器 (只取正規交易時間 09:30-16:00)
+                        # 這會產生一個 True/False 的遮罩 (Mask)
                         mask_reg = (df_intra_tz.index.time >= open_time) & (df_intra_tz.index.time <= close_time)
                         
-                        # 1. 繪製灰色虛線 (盤前/盤後數據 - 雖然範圍被裁切但保留邏輯)
-                        fig_spark.add_trace(go.Scatter(x=df_intra_tz.index, y=df_intra_tz['Close'], mode='lines', line=dict(color='#bdc3c7', width=1.5, dash='dot'), hoverinfo='skip'))
+                        # 2. 繪製灰色虛線 (盤前/盤後數據)
+                        # 這一層畫全部數據，但用虛線，讓它在背景當參考
+                        fig_spark.add_trace(go.Scatter(
+                            x=df_intra_tz.index, 
+                            y=df_intra_tz['Close'], 
+                            mode='lines', 
+                            line=dict(color='#bdc3c7', width=1.5, dash='dot'), 
+                            hoverinfo='skip'
+                        ))
                         
-                        # 2. [修正] 繪製 VWAP (只顯示正規交易時間內)
+                        # 3. [修正] 繪製 VWAP (只顯示正規交易時間內)
                         if 'VWAP' in df_intra_tz.columns:
-                            # 只取正規時間內的 VWAP
+                            # 利用遮罩只取出「盤中」的 VWAP
                             df_vwap = df_intra_tz[mask_reg]
                             if not df_vwap.empty:
-                                fig_spark.add_trace(go.Scatter(x=df_vwap.index, y=df_vwap['VWAP'], mode='lines', line=dict(color=COLOR_VWAP, width=1.5), name='VWAP', hoverinfo='skip'))
+                                fig_spark.add_trace(go.Scatter(
+                                    x=df_vwap.index, 
+                                    y=df_vwap['VWAP'], 
+                                    mode='lines', 
+                                    line=dict(color=COLOR_VWAP, width=1.5), 
+                                    name='VWAP', 
+                                    hoverinfo='skip'
+                                ))
                         
-                        # 3. 繪製正規盤 (彩色實線 + 填充)
+                        # 4. 繪製正規盤走勢 (彩色實線 + 填充區域)
+                        # 利用遮罩只取出「盤中」的股價，這樣填充顏色就不會溢出到盤前盤後
                         df_regular = df_intra_tz[mask_reg]
                         if not df_regular.empty:
                             day_open_reg = df_regular['Open'].iloc[0]
                             day_close_reg = df_regular['Close'].iloc[-1]
                             spark_color = COLOR_UP if day_close_reg >= day_open_reg else COLOR_DOWN
+                            # 設定填充顏色
                             fill_color = "rgba(5, 154, 129, 0.15)" if day_close_reg >= day_open_reg else "rgba(242, 54, 69, 0.15)"
-                            fig_spark.add_trace(go.Scatter(x=df_regular.index, y=df_regular['Close'], mode='lines', line=dict(color=spark_color, width=2), fill='tozeroy', fillcolor=fill_color))
+                            
+                            fig_spark.add_trace(go.Scatter(
+                                x=df_regular.index, 
+                                y=df_regular['Close'], 
+                                mode='lines', 
+                                line=dict(color=spark_color, width=2), 
+                                fill='tozeroy', 
+                                fillcolor=fill_color
+                            ))
 
-                        # [修正] 設定 X 軸範圍，強制鎖定在正規交易時間，解決對齊問題
+                        # 5. [修正] 強制鎖定 X 軸範圍 (解決對齊問題)
+                        # 這樣圖表的左邊緣就會剛好是 09:30，右邊緣是 16:00
+                        # 剛好對齊下方的「開盤」與「收盤」文字
                         if ".TW" not in ticker_input:
                             current_date = df_intra_tz.index[0].date()
                             tz_ny = pytz.timezone('America/New_York')
-                            # 修改範圍：從 04:00~20:00 改為 09:30~16:00 (剛好對齊開收盤文字)
+                            
+                            # 設定範圍：09:30 ~ 16:00
                             dt_start = tz_ny.localize(datetime.combine(current_date, time(9, 30)))
                             dt_end = tz_ny.localize(datetime.combine(current_date, time(16, 0)))
+                            
                             fig_spark.update_layout(xaxis=dict(range=[dt_start, dt_end], visible=False))
                         else:
-                            # 台股維持自動或固定範圍 (台股通常數據本身就是 09:00-13:30)
+                            # 台股維持自動 (因為台股數據通常本身就是 09:00-13:30)
                             fig_spark.update_layout(xaxis=dict(visible=False))
 
+                        # 設定 Y 軸與邊距
                         y_min, y_max = day_low * 0.999, day_high * 1.001
-                        fig_spark.update_layout(height=80, margin=dict(l=0, r=40, t=5, b=5), yaxis=dict(visible=False, range=[y_min, y_max]), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False, dragmode=False)
+                        fig_spark.update_layout(
+                            height=80, 
+                            margin=dict(l=0, r=40, t=5, b=5), 
+                            yaxis=dict(visible=False, range=[y_min, y_max]), 
+                            paper_bgcolor='rgba(0,0,0,0)', 
+                            plot_bgcolor='rgba(0,0,0,0)', 
+                            showlegend=False, 
+                            dragmode=False
+                        )
 
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
                     if not df_intra.empty:
