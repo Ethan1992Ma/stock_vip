@@ -231,28 +231,25 @@ if ticker_input:
 
             with tab_analysis:
                 if not df_intra.empty:
+                    # 計算 VWAP
                     df_intra = calculate_vwap(df_intra)
+                    
+                    # 處理時區 (確保 index 為 datetime 且有正確時區)
                     df_intra.index = pd.to_datetime(df_intra.index)
                     
-                    # 判斷時區 (美股 vs 台股)
                     is_us = ".TW" not in ticker_input
-                    if is_us:
-                        tz_str = 'America/New_York'
-                    else:
-                        tz_str = 'Asia/Taipei'
-                        
-                    # 處理時區轉換 (避免 Naive Timestamp 錯誤)
-                    if df_intra.index.tz is None:
-                        # 如果是 Naive，先假設為 UTC 再轉，或者如果是 yfinance 抓下來的通常要小心
-                        # 這裡做一個簡單的保護：先轉 UTC 再轉目標時區，或直接 localize
-                        try:
-                            df_intra_tz = df_intra.tz_localize('UTC').tz_convert(tz_str)
-                        except:
-                            df_intra_tz = df_intra.tz_localize(tz_str)
-                    else:
-                        df_intra_tz = df_intra.tz_convert(tz_str)
+                    tz_target = 'America/New_York' if is_us else 'Asia/Taipei'
                     
-                    # 準備數據
+                    if df_intra.index.tz is None:
+                        try:
+                            # 嘗試先定為 UTC 再轉，或直接定為目標時區
+                            df_intra_tz = df_intra.tz_localize('UTC').tz_convert(tz_target)
+                        except:
+                            df_intra_tz = df_intra.tz_localize(tz_target)
+                    else:
+                        df_intra_tz = df_intra.tz_convert(tz_target)
+                    
+                    # 準備數據 (for cards)
                     day_high = df_intra_tz['High'].max()
                     day_low = df_intra_tz['Low'].min()
                 
@@ -274,18 +271,17 @@ if ticker_input:
                 st.markdown(f"### 📱 {info.get('longName', ticker_input)} ({ticker_input})")
                 st.caption(f"目前策略：{strat_desc}")
                 
+                # --- 迷你走勢圖區塊 (修正版) ---
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
-                    with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
                         # 1. 定義時間範圍字串 (用於直接過濾數據)
-                        is_us = ".TW" not in ticker_input
                         t_start = "09:30" if is_us else "09:00"
                         t_end = "16:00" if is_us else "13:30"
                         
                         # 2. 【絕對過濾】直接使用 Pandas 刪除盤前盤後資料
-                        # 這行指令會把不屬於 09:30~16:00 的資料全部丟掉，圖表就不可能畫出來了
+                        # 這行指令會把不屬於交易時段的資料全部丟掉
                         df_plot = df_intra_tz.between_time(t_start, t_end).copy()
                         
                         if not df_plot.empty:
@@ -309,11 +305,12 @@ if ticker_input:
                                 fill='tozeroy', fillcolor=fill_color, hoverinfo='skip'
                             ))
                             
-                            # 5. 設定 X 軸範圍 (確保左右文字對齊)
+                            # 5. 強制鎖定 X 軸範圍 (確保左右文字對齊)
+                            # 取得「數據的日期」（避免用 today，以免跨日問題）
                             current_date = df_plot.index[0].date()
-                            tz_obj = pytz.timezone('America/New_York' if is_us else 'Asia/Taipei')
+                            tz_obj = pytz.timezone(tz_target)
                             
-                            # 建立當日的標準開收盤時間點
+                            # 建立當日的標準開收盤時間點 (Aware datetime)
                             dt_start = tz_obj.localize(datetime.combine(current_date, time(9, 30) if is_us else time(9, 0)))
                             dt_end = tz_obj.localize(datetime.combine(current_date, time(16, 0) if is_us else time(13, 30)))
                             
