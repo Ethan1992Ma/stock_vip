@@ -268,7 +268,6 @@ if ticker_input:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
-                    with c1:
                     fig_spark = go.Figure()
                     if not df_intra.empty:
                         # 定義正規交易時間遮罩 (用於篩選數據)
