@@ -279,6 +279,7 @@ if ticker_input:
                             df_plot = df_intra.tz_convert(tz_tw)
 
                         # --- 2. 定義交易日範圍 (17:00 ~ 隔日 09:00) ---
+                        # 取得最新一筆數據的時間，推算「當前交易日」的起始點
                         last_dt = df_plot.index[-1]
                         if last_dt.hour < 12: # 凌晨/早上 -> 交易日從昨天 17:00 開始
                             session_start = (last_dt - pd.Timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
@@ -289,13 +290,15 @@ if ticker_input:
 
                         # 定義正規盤 (冬令時: 22:30 - 05:00)
                         reg_start = session_start.replace(hour=22, minute=30)
-                        reg_end = session_start + pd.Timedelta(days=1).replace(hour=5, minute=0, second=0, microsecond=0)
+                        
+                        # [修正錯誤] 這裡加了括號，先計算日期加一天，再取代時間
+                        reg_end = (session_start + pd.Timedelta(days=1)).replace(hour=5, minute=0, second=0, microsecond=0)
 
                         # 篩選數據：只保留本場次 (17:00 ~ 09:00)
                         df_plot = df_plot[(df_plot.index >= session_start) & (df_plot.index <= session_end)]
 
                         if not df_plot.empty:
-                            # 分割出正規盤數據 (用於填色與 VWAP)
+                            # 分割出正規盤數據 (用於填色)
                             df_reg = df_plot[(df_plot.index >= reg_start) & (df_plot.index <= reg_end)]
 
                             # --- 3. 繪圖層 (Layers) ---
@@ -332,34 +335,42 @@ if ticker_input:
                                         name='VWAP', hoverinfo='skip'
                                     ))
 
-                            # --- 4. 座標軸設定 (關鍵：使用 tickvals 原生對齊) ---
-                            # 計算四個關鍵時間點
-                            tick_vals = [session_start, reg_start, reg_end, session_end]
-                            tick_texts = [
-                                "17:00<br><span style='font-size:9px; color:gray'>盤前</span>",
-                                "🔔22:30<br><span style='font-size:9px; color:gray'>開盤</span>",
-                                "🌙05:00<br><span style='font-size:9px; color:gray'>收盤</span>",
-                                "09:00<br><span style='font-size:9px; color:gray'>結算</span>"
-                            ]
+                            # --- 4. 座標軸設定 (關鍵：用 X 軸刻度取代 HTML) ---
+                            # 台股與美股分開處理
+                            if ".TW" not in ticker_input:
+                                # 美股：設定 4 個關鍵時間點
+                                tick_vals = [session_start, reg_start, reg_end, session_end]
+                                tick_texts = [
+                                    "17:00<br><span style='font-size:9px; color:gray'>盤前</span>",
+                                    "🔔22:30<br><span style='font-size:9px; color:gray'>開盤</span>",
+                                    "🌙05:00<br><span style='font-size:9px; color:gray'>收盤</span>",
+                                    "09:00<br><span style='font-size:9px; color:gray'>結算</span>"
+                                ]
+                                x_range = [session_start, session_end]
+                            else:
+                                # 台股 (簡單處理)
+                                tick_vals = None 
+                                tick_texts = None
+                                x_range = None
 
                             y_min = df_plot['Low'].min() * 0.999
                             y_max = df_plot['High'].max() * 1.001
 
                             fig_spark.update_layout(
-                                height=110, # 增加高度給文字空間
-                                margin=dict(l=10, r=10, t=5, b=35), # 底部留白
+                                height=110, # 稍微加高給文字空間
+                                margin=dict(l=10, r=10, t=5, b=35), # 底部留白給 X 軸標籤
                                 xaxis=dict(
-                                    visible=True, # 必須開啟 X 軸
-                                    range=[session_start, session_end],
+                                    visible=True, # 開啟 X 軸
+                                    range=x_range,
                                     fixedrange=True,
-                                    showgrid=False,
-                                    showline=False,
+                                    showgrid=False, # 不顯示網格
+                                    showline=False, # 不顯示軸線
                                     zeroline=False,
-                                    tickmode='array',
-                                    tickvals=tick_vals,
-                                    ticktext=tick_texts,
-                                    tickfont=dict(size=11),
-                                    side='bottom'
+                                    tickmode='array', # 指定刻度模式
+                                    tickvals=tick_vals, # 設定刻度位置
+                                    ticktext=tick_texts, # 設定刻度文字
+                                    side='bottom',
+                                    tickfont=dict(size=11)
                                 ),
                                 yaxis=dict(visible=False, range=[y_min, y_max], fixedrange=True),
                                 paper_bgcolor='rgba(0,0,0,0)',
@@ -368,7 +379,9 @@ if ticker_input:
                                 dragmode=False
                             )
 
+                    # 顯示價格卡片
                     st.markdown(get_price_card_html(regular_price, reg_change, reg_pct, is_extended, ext_price, ext_pct, ext_label, day_high_pct, day_low_pct), unsafe_allow_html=True)
+                    
                     if not df_intra.empty:
                         st.plotly_chart(fig_spark, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
                 
