@@ -440,11 +440,30 @@ if ticker_input:
 
                 # 2. 成交量
                 st.markdown("<div class='chart-title'>📊 成交量</div>", unsafe_allow_html=True)
+                
+                # 取得最大成交量，用於設定 Y 軸高度
+                max_vol = df_chart['Volume'].max()
+                
                 colors = [VOL_EXPLODE if (r['Volume']/(r['Vol_MA'] if r['Vol_MA']>0 else 1))>=2 else VOL_NORMAL if (r['Volume']/(r['Vol_MA'] if r['Vol_MA']>0 else 1))>=1 else VOL_SHRINK for _, r in df_chart.iterrows()]
-                fig_vol = go.Figure(data=[go.Bar(x=df_chart.index, y=df_chart['Volume'], marker_color=colors), go.Scatter(x=df_chart.index, y=df_chart['Vol_MA'], line=dict(color='black', width=1))])
-                fig_vol.update_layout(height=200, margin=dict(l=10,r=10,t=10,b=10), showlegend=False, template="plotly_white", dragmode=False)
+                
+                fig_vol = go.Figure(data=[
+                    go.Bar(x=df_chart.index, y=df_chart['Volume'], marker_color=colors), 
+                    go.Scatter(x=df_chart.index, y=df_chart['Vol_MA'], line=dict(color='black', width=1))
+                ])
+
+                fig_vol.update_layout(
+                    height=200, 
+                    margin=dict(l=10,r=10,t=10,b=10), 
+                    showlegend=False, 
+                    template="plotly_white", 
+                    dragmode=False,
+                    # ▼▼▼ 關鍵修改：設定 Y 軸範圍 (最大量 * 1.15 = 預留 15% 空間) ▼▼▼
+                    yaxis=dict(range=[0, max_vol * 1.15], fixedrange=True) 
+                )
+                
                 fig_vol.update_xaxes(rangebreaks=range_breaks, fixedrange=True)
-                fig_vol.update_yaxes(fixedrange=True)
+                # fig_vol.update_yaxes(fixedrange=True) # 這行可以拿掉，因為已經整合在 update_layout 的 yaxis 裡了
+                
                 st.plotly_chart(fig_vol, use_container_width=True, config=chart_config)
 
                 # 3. RSI & MACD
