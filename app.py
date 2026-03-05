@@ -349,7 +349,7 @@ def get_gemini_model():
     for m in genai.list_models():
         if 'generateContent' in m.supported_generation_methods and 'flash' in m.name:
             return genai.GenerativeModel(m.name)
-    return genai.GenerativeModel('gemini-1.5-flash')
+    return genai.GenerativeModel('gemini-3.1-flash-lite')
 
 
 # --- 技術分析摘要 (for Gemini prompt) ---
